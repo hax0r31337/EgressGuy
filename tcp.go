@@ -76,7 +76,7 @@ func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TC
 		},
 		{
 			OptionType: layers.TCPOptionKindWindowScale,
-			OptionData: []byte{0x09},
+			OptionData: []byte{14},
 		},
 	}
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"flag"
 	"fmt"
@@ -40,7 +41,7 @@ func main() {
 	}
 
 	var payload []byte
-	var addr net.IP
+	var addrs []net.IP
 	var port layers.TCPPort
 	{
 		req, err := http.NewRequest(method, request, nil)
@@ -60,19 +61,10 @@ func main() {
 		payload = buf.Bytes()
 
 		// dns lookup
-		addrs, err := net.LookupIP(req.Host)
+		addrs, err = net.DefaultResolver.LookupIP(context.Background(), "ip4", req.Host)
 		if err != nil {
 			log.Fatal(err)
-		}
-
-		for _, a := range addrs {
-			if a.To4() != nil {
-				addr = a.To4()
-				break
-			}
-		}
-
-		if addr == nil {
+		} else if len(addrs) == 0 {
 			log.Fatal("no ipv4 address found")
 		}
 
@@ -132,6 +124,7 @@ func main() {
 			for {
 				dialLock.Lock()
 				sourcePort++
+				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
 				conn, err := NewTcpConn(eg, src, addr, sourcePort, port, payload)
 				dialLock.Unlock()
 				if err != nil {

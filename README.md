@@ -2,7 +2,7 @@
 
 Generates egress bills to whose using S3 bucket to serve BLOBs.
 
-# How to use
+## How to use
 
 ```bash
 # build the binary
@@ -11,7 +11,7 @@ go build -v -trimpath -ldflags "-s -w -buildid=" .
 ./egressguy -r "http://h55na.gdl.easebar.com/identityv_setup_release_oversea_0112.exe"
 ```
 
-# How it works
+## How it works
 
 The program establishes the connection and send http requests by sending raw TCP packets to the server.
 
