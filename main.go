@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -9,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -21,7 +23,7 @@ import (
 func main() {
 	var workers int
 	var timeout time.Duration
-	var method, request, userAgent string
+	var method, request, userAgent, resolve string
 	{
 		var timeoutStr string
 
@@ -30,6 +32,7 @@ func main() {
 		flag.StringVar(&method, "m", "GET", "method")
 		flag.StringVar(&request, "r", "", "request")
 		flag.StringVar(&userAgent, "u", "EgressGuy/1.0", "user agent")
+		flag.StringVar(&resolve, "d", "", "resolve override (file)")
 
 		flag.Parse()
 
@@ -61,11 +64,30 @@ func main() {
 		payload = buf.Bytes()
 
 		// dns lookup
-		addrs, err = net.DefaultResolver.LookupIP(context.Background(), "ip4", req.Host)
-		if err != nil {
-			log.Fatal(err)
-		} else if len(addrs) == 0 {
-			log.Fatal("no ipv4 address found")
+		if resolve == "" {
+			addrs, err = net.DefaultResolver.LookupIP(context.Background(), "ip4", req.Host)
+			if err != nil {
+				log.Fatal(err)
+			} else if len(addrs) == 0 {
+				log.Fatal("no ipv4 address found")
+			}
+		} else {
+			f, err := os.Open(resolve)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			addrs = make([]net.IP, 0)
+
+			scanner := bufio.NewScanner(f)
+			for scanner.Scan() {
+				ip := net.ParseIP(scanner.Text())
+				if ip == nil {
+					log.Fatal("invalid ip address")
+				}
+
+				addrs = append(addrs, ip)
+			}
 		}
 
 		if req.URL.Port() == "" {

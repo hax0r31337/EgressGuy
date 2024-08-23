@@ -34,6 +34,7 @@ type TcpConn struct {
 	counter     uint8
 	lastCounter uint8
 	payload     []byte
+	cachedAck   layers.TCP
 
 	onClose     chan struct{}
 	onCloseOnce sync.Once
@@ -71,9 +72,9 @@ func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TC
 			OptionType: layers.TCPOptionKindMSS,
 			OptionData: []byte{byte(conn.Mss >> 8), byte(conn.Mss)},
 		},
-		{
-			OptionType: layers.TCPOptionKindSACKPermitted,
-		},
+		// {
+		// 	OptionType: layers.TCPOptionKindSACKPermitted,
+		// },
 		{
 			OptionType: layers.TCPOptionKindWindowScale,
 			OptionData: []byte{14},
@@ -83,6 +84,9 @@ func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TC
 	if err := conn.SendPacket(&tcp, nil); err != nil {
 		return nil, err
 	}
+
+	conn.cachedAck = conn.NewPacket()
+	conn.cachedAck.ACK = true
 
 	conn.Instance.AddListener(&conn)
 
@@ -178,6 +182,34 @@ func (c *TcpConn) HandlePacket(packet gopacket.Packet, layer gopacket.Layer) {
 	tcp := layer.(*layers.TCP)
 
 	switch {
+	case c.State == TCP_CONNECTION_ESTABLISHED:
+		if tcp.FIN {
+			c.setClosed(false)
+		} else if tcp.RST {
+			c.setClosed(false)
+			return
+		} else if len(tcp.Payload) == 0 {
+			return
+		} else if c.counter != 0 {
+			c.counter--
+
+			if c.Ack+uint32(len(tcp.Payload))+uint32(c.Mss)*2 > tcp.Seq {
+				return
+			} else {
+				c.lastCounter = 1
+			}
+		}
+		c.counter = c.lastCounter + 1
+		c.lastCounter = max(c.counter, 5)
+
+		c.Ack = tcp.Seq
+
+		c.cachedAck.Seq = c.Seq
+		c.cachedAck.Ack = c.Ack
+
+		if err := c.SendPacket(&c.cachedAck, nil); err != nil {
+			log.Println("error sending ACK:", err)
+		}
 	case c.State == TCP_CONNECTION_SYN_SENT && tcp.SYN && tcp.ACK:
 		c.State = TCP_CONNECTION_ESTABLISHED
 		c.Ack = tcp.Seq
@@ -195,34 +227,6 @@ func (c *TcpConn) HandlePacket(packet gopacket.Packet, layer gopacket.Layer) {
 		c.Ack++
 
 		c.Write(c.payload)
-	case c.State == TCP_CONNECTION_ESTABLISHED:
-		if tcp.FIN {
-			c.setClosed(false)
-		} else if tcp.RST {
-			c.setClosed(false)
-			return
-		} else if len(tcp.Payload) == 0 {
-			return
-		} else if c.counter != 0 {
-			c.counter--
-
-			if c.Ack+uint32(len(tcp.Payload))+uint32(c.Mss) > tcp.Seq {
-				return
-			} else {
-				c.lastCounter = 0
-			}
-		}
-		c.counter = c.lastCounter + 1
-		c.lastCounter = max(c.counter, 5)
-
-		c.Ack = tcp.Seq
-
-		resp := c.NewPacket()
-		resp.ACK = true
-
-		if err := c.SendPacket(&resp, nil); err != nil {
-			log.Println("error sending ACK:", err)
-		}
 	case c.State == TCP_CONNECTION_FINISHED:
 		c.Instance.RemoveListener(c)
 	}

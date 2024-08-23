@@ -92,29 +92,32 @@ func (eg *EgressGuy) ListenPackets() {
 			return
 		}
 
+		if d[12] != 0x08 || d[13] != 0x00 {
+			continue
+		}
+
 		packet := gopacket.NewPacket(d, decoder, gopacket.NoCopy)
-		if layerIPv4 := packet.Layer(layers.LayerTypeIPv4); layerIPv4 != nil {
-			ip4 := layerIPv4.(*layers.IPv4)
-			// eg.listenerLock.Lock()
-			for _, listener := range eg.Listeners {
-				proto, src, dst, srcPort, dstPort := listener.ConnectionTuple()
-				if proto != ip4.Protocol || !src.Equal(ip4.DstIP) || !dst.Equal(ip4.SrcIP) {
-					continue
-				}
+		ip4 := packet.Layer(layers.LayerTypeIPv4).(*layers.IPv4)
 
-				if proto == layers.IPProtocolTCP {
-					if layerTCP := packet.Layer(layers.LayerTypeTCP); layerTCP != nil {
-						tcp := layerTCP.(*layers.TCP)
-						if srcPort == tcp.DstPort && dstPort == tcp.SrcPort {
-							listener.HandlePacket(packet, layerTCP)
+		// eg.listenerLock.Lock()
+		for _, listener := range eg.Listeners {
+			proto, src, dst, srcPort, dstPort := listener.ConnectionTuple()
+			if proto != ip4.Protocol || !src.Equal(ip4.DstIP) || !dst.Equal(ip4.SrcIP) {
+				continue
+			}
 
-							eg.Traffic += uint64(ci.Length)
-						}
+			if proto == layers.IPProtocolTCP {
+				if layerTCP := packet.Layer(layers.LayerTypeTCP); layerTCP != nil {
+					tcp := layerTCP.(*layers.TCP)
+					if srcPort == tcp.DstPort && dstPort == tcp.SrcPort {
+						listener.HandlePacket(packet, layerTCP)
+
+						eg.Traffic += uint64(ci.Length)
 					}
 				}
 			}
-			// eg.listenerLock.Unlock()
 		}
+		// eg.listenerLock.Unlock()
 	}
 }
 
