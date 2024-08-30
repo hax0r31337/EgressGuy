@@ -18,6 +18,8 @@ const (
 )
 
 type TcpConn struct {
+	TcpHandler
+
 	Instance *EgressGuy
 
 	State uint8
@@ -31,16 +33,11 @@ type TcpConn struct {
 	SrcPort   layers.TCPPort
 	DstPort   layers.TCPPort
 
-	counter     uint8
-	lastCounter uint8
-	payload     []byte
-	cachedAck   layers.TCP
-
 	onClose     chan struct{}
 	onCloseOnce sync.Once
 }
 
-func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TCPPort, payload []byte) (*TcpConn, error) {
+func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TCPPort, handler TcpHandler) (*TcpConn, error) {
 	ip4 := layers.IPv4{
 		SrcIP:    src,
 		DstIP:    dst,
@@ -57,7 +54,6 @@ func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TC
 		DstPort:   dstPort,
 		Mss:       uint16(instance.Interface.MTU - 40),
 		Win:       65535,
-		payload:   payload,
 		onClose:   make(chan struct{}),
 	}
 
@@ -85,9 +81,7 @@ func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TC
 		return nil, err
 	}
 
-	conn.cachedAck = conn.NewPacket()
-	conn.cachedAck.ACK = true
-
+	conn.SetHandler(handler)
 	conn.Instance.AddListener(&conn)
 
 	return &conn, nil
@@ -178,56 +172,15 @@ func (c *TcpConn) Write(payload []byte) error {
 	return nil
 }
 
-func (c *TcpConn) HandlePacket(packet gopacket.Packet, layer gopacket.Layer) {
-	tcp := layer.(*layers.TCP)
-
-	switch {
-	case c.State == TCP_CONNECTION_ESTABLISHED:
-		if tcp.FIN {
-			c.setClosed(false)
-		} else if tcp.RST {
-			c.setClosed(false)
-			return
-		} else if len(tcp.Payload) == 0 {
-			return
-		} else if c.counter != 0 {
-			c.counter--
-
-			if c.Ack+uint32(len(tcp.Payload))+uint32(c.Mss)*2 > tcp.Seq {
-				return
-			} else {
-				c.lastCounter = 1
-			}
-		}
-		c.counter = c.lastCounter + 1
-		c.lastCounter = max(c.counter, 5)
-
-		c.Ack = tcp.Seq
-
-		c.cachedAck.Seq = c.Seq
-		c.cachedAck.Ack = c.Ack
-
-		if err := c.SendPacket(&c.cachedAck, nil); err != nil {
-			log.Println("error sending ACK:", err)
-		}
-	case c.State == TCP_CONNECTION_SYN_SENT && tcp.SYN && tcp.ACK:
-		c.State = TCP_CONNECTION_ESTABLISHED
-		c.Ack = tcp.Seq
-
-		for _, opt := range tcp.Options {
-			if opt.OptionType == layers.TCPOptionKindMSS {
-				mss := uint16(opt.OptionData[0])<<8 | uint16(opt.OptionData[1])
-				if mss < c.Mss {
-					c.Mss = mss
-				}
-			}
-		}
-
-		c.Seq++
-		c.Ack++
-
-		c.Write(c.payload)
-	case c.State == TCP_CONNECTION_FINISHED:
-		c.Instance.RemoveListener(c)
+func (c *TcpConn) SetHandler(handler TcpHandler) {
+	if handler == nil {
+		log.Fatal("handler cannot be nil")
 	}
+
+	if c.TcpHandler != nil {
+		c.TcpHandler.SetConn(nil)
+	}
+
+	c.TcpHandler = handler
+	handler.SetConn(c)
 }

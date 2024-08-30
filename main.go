@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -65,7 +66,7 @@ func main() {
 
 		// dns lookup
 		if resolve == "" {
-			addrs, err = net.DefaultResolver.LookupIP(context.Background(), "ip4", req.Host)
+			addrs, err = net.DefaultResolver.LookupIP(context.Background(), "ip4", req.URL.Hostname())
 			if err != nil {
 				log.Fatal(err)
 			} else if len(addrs) == 0 {
@@ -90,9 +91,16 @@ func main() {
 			}
 		}
 
-		if req.URL.Port() == "" {
+		switch strings.ToLower(req.URL.Scheme) {
+		case "http":
 			port = 80
-		} else {
+		case "https":
+			port = 443
+		default:
+			log.Fatal("unsupported scheme")
+		}
+
+		if req.URL.Port() != "" {
 			i, err := strconv.Atoi(req.URL.Port())
 			if err != nil {
 				log.Fatal(err)
@@ -147,7 +155,10 @@ func main() {
 				dialLock.Lock()
 				sourcePort++
 				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
-				conn, err := NewTcpConn(eg, src, addr, sourcePort, port, payload)
+
+				handler := NewPayloadAckHandler(payload)
+
+				conn, err := NewTcpConn(eg, src, addr, sourcePort, port, handler)
 				dialLock.Unlock()
 				if err != nil {
 					log.Fatal(err)
