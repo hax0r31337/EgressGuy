@@ -31,7 +31,7 @@ func main() {
 		flag.IntVar(&workers, "w", 50, "number of workers")
 		flag.StringVar(&timeoutStr, "t", "7s", "timeout")
 		flag.StringVar(&method, "m", "GET", "method")
-		flag.StringVar(&request, "r", "", "request")
+		flag.StringVar(&request, "r", "", "request url")
 		flag.StringVar(&userAgent, "u", "EgressGuy/1.0", "user agent")
 		flag.StringVar(&resolve, "d", "", "resolve override (file)")
 
@@ -47,6 +47,7 @@ func main() {
 	var payload []byte
 	var addrs []net.IP
 	var port layers.TCPPort
+	var tls bool
 	{
 		req, err := http.NewRequest(method, request, nil)
 		if err != nil {
@@ -96,6 +97,7 @@ func main() {
 			port = 80
 		case "https":
 			port = 443
+			tls = true
 		default:
 			log.Fatal("unsupported scheme")
 		}
@@ -151,12 +153,21 @@ func main() {
 
 	for range workers {
 		go func() {
+			var handler TcpHandler
+
 			for {
 				dialLock.Lock()
 				sourcePort++
 				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
 
-				handler := NewPayloadAckHandler(payload)
+				if tls {
+					log.Fatal("not implemented")
+				} else {
+					h := NewAckHandler()
+					h.Write(payload)
+
+					handler = h
+				}
 
 				conn, err := NewTcpConn(eg, src, addr, sourcePort, port, handler)
 				dialLock.Unlock()

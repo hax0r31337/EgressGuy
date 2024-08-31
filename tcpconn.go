@@ -68,9 +68,6 @@ func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TC
 			OptionType: layers.TCPOptionKindMSS,
 			OptionData: []byte{byte(conn.Mss >> 8), byte(conn.Mss)},
 		},
-		// {
-		// 	OptionType: layers.TCPOptionKindSACKPermitted,
-		// },
 		{
 			OptionType: layers.TCPOptionKindWindowScale,
 			OptionData: []byte{14},
@@ -145,33 +142,6 @@ func (c *TcpConn) ConnectionTuple() (proto layers.IPProtocol, src, dst net.IP, s
 	return layers.IPProtocolTCP, c.IPv4Layer.SrcIP, c.IPv4Layer.DstIP, c.SrcPort, c.DstPort
 }
 
-func (c *TcpConn) Write(payload []byte) error {
-	if c.State != TCP_CONNECTION_ESTABLISHED {
-		return nil
-	}
-
-	for len(payload) > 0 {
-		size := int(c.Mss)
-		if len(payload) < size {
-			size = len(payload)
-		}
-
-		tcp := c.NewPacket()
-		// although it's incorrect behavior
-		// it doesn't matter in this case
-		tcp.ACK = true
-		tcp.PSH = true
-
-		if err := c.SendPacket(&tcp, payload[:size]); err != nil {
-			return err
-		}
-
-		payload = payload[size:]
-	}
-
-	return nil
-}
-
 func (c *TcpConn) SetHandler(handler TcpHandler) {
 	if handler == nil {
 		log.Fatal("handler cannot be nil")
@@ -183,4 +153,15 @@ func (c *TcpConn) SetHandler(handler TcpHandler) {
 
 	c.TcpHandler = handler
 	handler.SetConn(c)
+}
+
+func (c *TcpConn) HandlePacket(packet gopacket.Packet, layer gopacket.Layer) {
+	if c.TcpHandler == nil {
+		log.Fatal("handler cannot be nil")
+	}
+
+	err := c.TcpHandler.HandlePacket(packet, layer.(*layers.TCP))
+	if err != nil {
+		log.Fatal(err)
+	}
 }

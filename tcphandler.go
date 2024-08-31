@@ -1,7 +1,9 @@
 package main
 
 import (
-	"log"
+	"net"
+	"sync"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -9,51 +11,184 @@ import (
 
 type TcpHandler interface {
 	SetConn(conn *TcpConn)
-	HandlePacket(packet gopacket.Packet, layer gopacket.Layer)
+	HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error
+}
+
+type ReliableWriterHandler struct {
+	conn *TcpConn
+
+	buf     []byte
+	bufLock sync.Mutex
+
+	serverSeq         uint32
+	serverWindowScale uint32
+	serverWindow      uint32
+	lastWrite         time.Time
+}
+
+func NewReliableWriterHandler() *ReliableWriterHandler {
+	return &ReliableWriterHandler{
+		buf: make([]byte, 0),
+	}
+}
+
+func (c *ReliableWriterHandler) SetConn(conn *TcpConn) {
+	c.conn = conn
+
+	c.serverWindowScale = 1
+	c.serverSeq = conn.Seq
+
+	go func() {
+		t := time.NewTicker(time.Second)
+
+		for range t.C {
+			if c.conn == nil || c.conn.State == TCP_CONNECTION_FINISHED {
+				break
+			}
+
+			c.writeCheck()
+		}
+	}()
+}
+
+func (c *ReliableWriterHandler) writeCheck() bool {
+	if len(c.buf) == 0 || c.conn == nil {
+		return false
+	}
+
+	writeAhead := c.conn.Seq - c.serverSeq
+	maxWrite := c.serverSeq + min(c.serverWindow, uint32(len(c.buf)))
+	now := time.Now()
+	if now.Sub(c.lastWrite) > time.Second {
+		// resend
+		c.conn.Seq = c.serverSeq
+	} else if writeAhead >= c.serverWindow {
+		return false
+	} else if writeAhead >= uint32(len(c.buf)) {
+		return false
+	}
+
+	if c.conn.Seq < c.serverSeq {
+		c.conn.Seq = c.serverSeq
+	}
+
+	c.bufLock.Lock()
+	for maxWrite > c.conn.Seq {
+		off := c.conn.Seq - c.serverSeq
+		d := c.buf[off:min(int(off)+int(c.conn.Mss), len(c.buf))]
+
+		tcp := c.conn.NewPacket()
+		// although it's incorrect behavior
+		// it doesn't matter in this case
+		tcp.ACK = true
+		tcp.PSH = true
+
+		if err := c.conn.SendPacket(&tcp, d); err != nil {
+			c.bufLock.Unlock()
+			return false
+		}
+	}
+	c.lastWrite = now
+	c.bufLock.Unlock()
+
+	return true
+}
+
+func (c *ReliableWriterHandler) Write(payload []byte) error {
+	if c.conn != nil && c.conn.State == TCP_CONNECTION_FINISHED {
+		return net.ErrClosed
+	}
+
+	c.bufLock.Lock()
+	c.buf = append(c.buf, payload...)
+	c.bufLock.Unlock()
+
+	c.writeCheck()
+
+	return nil
+}
+
+func (c *ReliableWriterHandler) HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error {
+	if tcp.ACK {
+		if c.serverSeq < tcp.Ack {
+			// advance buffer
+			c.bufLock.Lock()
+			c.buf = c.buf[tcp.Ack-c.serverSeq:]
+			c.bufLock.Unlock()
+
+			c.serverSeq = tcp.Ack
+		}
+
+		if tcp.SYN {
+			for _, opt := range tcp.Options {
+				if opt.OptionType == layers.TCPOptionKindWindowScale {
+					c.serverWindowScale = 1 << uint32(opt.OptionData[0])
+				}
+			}
+		}
+
+		c.serverWindow = uint32(tcp.Window) * c.serverWindowScale
+
+		w := c.writeCheck()
+		if tcp.SYN && !w {
+			// send ack
+			ack := c.conn.NewPacket()
+			ack.ACK = true
+
+			if err := c.conn.SendPacket(&ack, nil); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
 
 // sends some data, then acks incoming data
 // suitable for protocols without handshake, such as HTTP
-type PayloadAckHandler struct {
-	conn *TcpConn
-
-	payload []byte
+type AckHandler struct {
+	ReliableWriterHandler
 
 	counter     uint8
 	lastCounter uint8
 	cachedAck   layers.TCP
 }
 
-func NewPayloadAckHandler(payload []byte) *PayloadAckHandler {
-	return &PayloadAckHandler{
-		payload: payload,
+func NewAckHandler() *AckHandler {
+	h := AckHandler{
+		ReliableWriterHandler: *NewReliableWriterHandler(),
 	}
+
+	// synack increase seq by 1
+	h.Write([]byte{0xff})
+
+	return &h
 }
 
-func (c *PayloadAckHandler) SetConn(conn *TcpConn) {
-	c.conn = conn
+func (c *AckHandler) SetConn(conn *TcpConn) {
+	c.ReliableWriterHandler.SetConn(conn)
 
 	c.cachedAck = conn.NewPacket()
 	c.cachedAck.ACK = true
 }
 
-func (c *PayloadAckHandler) HandlePacket(packet gopacket.Packet, layer gopacket.Layer) {
-	tcp := layer.(*layers.TCP)
-
+func (c *AckHandler) HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error {
 	switch {
 	case c.conn.State == TCP_CONNECTION_ESTABLISHED:
+		c.ReliableWriterHandler.HandlePacket(packet, tcp)
+
 		if tcp.FIN {
 			c.conn.setClosed(false)
 		} else if tcp.RST {
 			c.conn.setClosed(false)
-			return
+			return nil
 		} else if len(tcp.Payload) == 0 {
-			return
+			return nil
 		} else if c.counter != 0 {
 			c.counter--
 
 			if c.conn.Ack+uint32(len(tcp.Payload))+uint32(c.conn.Mss)*2 > tcp.Seq {
-				return
+				return nil
 			} else {
 				c.lastCounter = 1
 			}
@@ -64,12 +199,19 @@ func (c *PayloadAckHandler) HandlePacket(packet gopacket.Packet, layer gopacket.
 		c.conn.Ack = tcp.Seq
 
 		c.cachedAck.Seq = c.conn.Seq
-		c.cachedAck.Ack = c.conn.Ack
+		c.cachedAck.Ack = tcp.Seq
 
 		if err := c.conn.SendPacket(&c.cachedAck, nil); err != nil {
-			log.Println("error sending ACK:", err)
+			return err
 		}
-	case c.conn.State == TCP_CONNECTION_SYN_SENT && tcp.SYN && tcp.ACK:
+	case c.conn.State == TCP_CONNECTION_SYN_SENT:
+		if tcp.RST || tcp.FIN {
+			c.conn.setClosed(false)
+			return nil
+		} else if !tcp.SYN || !tcp.ACK {
+			return nil
+		}
+
 		c.conn.State = TCP_CONNECTION_ESTABLISHED
 		c.conn.Ack = tcp.Seq
 
@@ -85,8 +227,10 @@ func (c *PayloadAckHandler) HandlePacket(packet gopacket.Packet, layer gopacket.
 		c.conn.Seq++
 		c.conn.Ack++
 
-		c.conn.Write(c.payload)
+		c.ReliableWriterHandler.HandlePacket(packet, tcp)
 	case c.conn.State == TCP_CONNECTION_FINISHED:
 		c.conn.Instance.RemoveListener(c.conn)
 	}
+
+	return nil
 }
