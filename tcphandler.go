@@ -119,24 +119,24 @@ func (c *ReliableWriterHandler) HandlePacket(packet gopacket.Packet, tcp *layers
 			c.serverSeq = tcp.Ack
 		}
 
+		c.serverWindow = uint32(tcp.Window) * c.serverWindowScale
+		w := c.writeCheck()
+
 		if tcp.SYN {
 			for _, opt := range tcp.Options {
 				if opt.OptionType == layers.TCPOptionKindWindowScale {
 					c.serverWindowScale = 1 << uint32(opt.OptionData[0])
 				}
 			}
-		}
 
-		c.serverWindow = uint32(tcp.Window) * c.serverWindowScale
+			if !w {
+				// send ack
+				ack := c.conn.NewPacket()
+				ack.ACK = true
 
-		w := c.writeCheck()
-		if tcp.SYN && !w {
-			// send ack
-			ack := c.conn.NewPacket()
-			ack.ACK = true
-
-			if err := c.conn.SendPacket(&ack, nil); err != nil {
-				return err
+				if err := c.conn.SendPacket(&ack, nil); err != nil {
+					return err
+				}
 			}
 		}
 	}

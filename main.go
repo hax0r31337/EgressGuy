@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"flag"
@@ -16,6 +15,8 @@ import (
 	"sync"
 	"time"
 	"unsafe"
+
+	ehttp "egressguy/http"
 
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/routing"
@@ -33,7 +34,7 @@ func main() {
 		flag.StringVar(&method, "m", "GET", "method")
 		flag.StringVar(&request, "r", "", "request url")
 		flag.StringVar(&userAgent, "u", "EgressGuy/1.0", "user agent")
-		flag.StringVar(&resolve, "d", "", "resolve override (file)")
+		flag.StringVar(&resolve, "d", "", "resolve override (file or ip)")
 
 		flag.Parse()
 
@@ -44,7 +45,7 @@ func main() {
 		}
 	}
 
-	var payload []byte
+	var payload ehttp.HttpPayload
 	var addrs []net.IP
 	var port layers.TCPPort
 	var tls bool
@@ -57,13 +58,7 @@ func main() {
 		req.Header.Set("User-Agent", userAgent)
 		req.Header.Set("Connection", "close")
 
-		var buf bytes.Buffer
-
-		if err := req.Write(&buf); err != nil {
-			log.Fatal(err)
-		}
-
-		payload = buf.Bytes()
+		payload = ehttp.NewHttpPayload(req)
 
 		// dns lookup
 		if resolve == "" {
@@ -73,6 +68,8 @@ func main() {
 			} else if len(addrs) == 0 {
 				log.Fatal("no ipv4 address found")
 			}
+		} else if addr := net.ParseIP(resolve); addr != nil {
+			addrs = []net.IP{addr}
 		} else {
 			f, err := os.Open(resolve)
 			if err != nil {
@@ -112,10 +109,17 @@ func main() {
 		}
 	}
 
+	if len(addrs) == 0 {
+		log.Fatal("no address found")
+	} else if workers == 0 {
+		log.Fatal("no workers")
+	}
+
 	router, err := routing.New()
 	if err != nil {
 		log.Fatal("routing error:", err)
 	}
+
 	iface, gw, src, err := router.Route(net.IPv4(8, 9, 6, 4))
 	if err != nil {
 		log.Fatal(err)
@@ -164,7 +168,12 @@ func main() {
 					log.Fatal("not implemented")
 				} else {
 					h := NewAckHandler()
-					h.Write(payload)
+					p := payload.GetPayload(ehttp.ALPN_HTTP1)
+					if p == nil {
+						continue
+					}
+
+					h.Write(p)
 
 					handler = h
 				}
@@ -179,7 +188,6 @@ func main() {
 				case <-time.After(timeout):
 					conn.Close()
 				case <-conn.onClose:
-
 					completed++
 				}
 			}
