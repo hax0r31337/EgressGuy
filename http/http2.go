@@ -17,7 +17,7 @@ const (
 )
 
 // write http2 request with the fingerprint of Chrome 128
-func writeRequestToFramer(framer *http2.Framer, req *http.Request) error {
+func writeRequestToFramer(framer *http2.Framer, req *http.Request, requests uint32) error {
 	framer.WriteSettings(http2.Setting{
 		ID:  http2.SettingHeaderTableSize,
 		Val: 65536,
@@ -41,10 +41,12 @@ func writeRequestToFramer(framer *http2.Framer, req *http.Request) error {
 
 	endStream := req.Body == nil || req.Body == http.NoBody
 
-	writeHeadersToFramer(framer, 1, endStream, headers)
+	for i := range requests {
+		writeHeadersToFramer(framer, i*2+1, endStream, headers)
 
-	if !endStream {
-		writeBodyToFramer(framer, 1, req)
+		if !endStream {
+			writeBodyToFramer(framer, i*2+1, req)
+		}
 	}
 
 	return nil

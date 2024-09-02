@@ -17,6 +17,8 @@ const (
 	TCP_CONNECTION_FINISHED
 )
 
+const TCP_WINDOW_SCALE uint8 = 14
+
 type TcpConn struct {
 	TcpHandler
 
@@ -70,7 +72,7 @@ func NewTcpConn(instance *EgressGuy, src, dst net.IP, srcPort, dstPort layers.TC
 		},
 		{
 			OptionType: layers.TCPOptionKindWindowScale,
-			OptionData: []byte{14},
+			OptionData: []byte{TCP_WINDOW_SCALE},
 		},
 	}
 

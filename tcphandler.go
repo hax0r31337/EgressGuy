@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -14,6 +15,9 @@ type TcpHandler interface {
 	HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error
 }
 
+// tcp writer with reliable transmission
+// resends data until acked
+// but kept as simple as possible, no congestion control
 type ReliableWriterHandler struct {
 	conn *TcpConn
 
@@ -94,9 +98,9 @@ func (c *ReliableWriterHandler) writeCheck() bool {
 	return true
 }
 
-func (c *ReliableWriterHandler) Write(payload []byte) error {
+func (c *ReliableWriterHandler) Write(payload []byte) (int, error) {
 	if c.conn != nil && c.conn.State == TCP_CONNECTION_FINISHED {
-		return net.ErrClosed
+		return 0, net.ErrClosed
 	}
 
 	c.bufLock.Lock()
@@ -105,7 +109,7 @@ func (c *ReliableWriterHandler) Write(payload []byte) error {
 
 	c.writeCheck()
 
-	return nil
+	return len(payload), nil
 }
 
 func (c *ReliableWriterHandler) HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error {
@@ -144,10 +148,18 @@ func (c *ReliableWriterHandler) HandlePacket(packet gopacket.Packet, tcp *layers
 	return nil
 }
 
+func (c *ReliableWriterHandler) Close() error {
+	if c.conn != nil {
+		return c.conn.Close()
+	}
+
+	return nil
+}
+
 // sends some data, then acks incoming data
 // suitable for protocols without handshake, such as HTTP
 type AckHandler struct {
-	ReliableWriterHandler
+	*ReliableWriterHandler
 
 	counter     uint8
 	lastCounter uint8
@@ -156,13 +168,19 @@ type AckHandler struct {
 
 func NewAckHandler() *AckHandler {
 	h := AckHandler{
-		ReliableWriterHandler: *NewReliableWriterHandler(),
+		ReliableWriterHandler: NewReliableWriterHandler(),
 	}
 
 	// synack increase seq by 1
 	h.Write([]byte{0xff})
 
 	return &h
+}
+
+func NewAckHandlerWithReliableWriterHandler(h *ReliableWriterHandler) *AckHandler {
+	return &AckHandler{
+		ReliableWriterHandler: h,
+	}
 }
 
 func (c *AckHandler) SetConn(conn *TcpConn) {
@@ -232,5 +250,144 @@ func (c *AckHandler) HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error
 		c.conn.Instance.RemoveListener(c.conn)
 	}
 
+	return nil
+}
+
+type ReliableReaderHandler struct {
+	*ReliableWriterHandler
+
+	windowSize       uint16
+	windowSizeScaled uint32
+	offset           uint32
+
+	buf          []byte
+	bufLock      sync.Mutex
+	bufFulfilled uint
+
+	recv chan struct{}
+}
+
+func NewReliableReaderHandler() *ReliableReaderHandler {
+	h := NewReliableWriterHandler()
+
+	h.Write([]byte{0xff})
+
+	return NewReliableReaderHandlerWithReliableWriterHandler(h)
+}
+
+func NewReliableReaderHandlerWithReliableWriterHandler(h *ReliableWriterHandler) *ReliableReaderHandler {
+	scale := uint32(1) << TCP_WINDOW_SCALE
+	w := (0xffff / scale) * scale
+
+	return &ReliableReaderHandler{
+		ReliableWriterHandler: h,
+		windowSize:            uint16(w / scale),
+		windowSizeScaled:      w,
+		buf:                   make([]byte, 0, w<<1),
+		recv:                  make(chan struct{}),
+	}
+}
+
+func (c *ReliableReaderHandler) SetConn(conn *TcpConn) {
+	c.ReliableWriterHandler.SetConn(conn)
+
+	c.offset = conn.Ack
+}
+
+func (c *ReliableReaderHandler) HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error {
+	switch {
+	case c.conn.State == TCP_CONNECTION_SYN_SENT:
+		if tcp.RST || tcp.FIN {
+			c.conn.setClosed(false)
+			return nil
+		} else if !tcp.SYN || !tcp.ACK {
+			return nil
+		}
+
+		c.conn.State = TCP_CONNECTION_ESTABLISHED
+		c.conn.Ack = tcp.Seq
+
+		for _, opt := range tcp.Options {
+			if opt.OptionType == layers.TCPOptionKindMSS {
+				mss := uint16(opt.OptionData[0])<<8 | uint16(opt.OptionData[1])
+				if mss < c.conn.Mss {
+					c.conn.Mss = mss
+				}
+			}
+		}
+
+		c.conn.Seq++
+		c.conn.Ack++
+		c.conn.Win = c.windowSize
+
+		// although it's not a common case
+		// for SYNACK packet to have payload
+		// but it's possible
+
+		c.offset = c.conn.Ack
+
+		fallthrough
+	case c.conn.State == TCP_CONNECTION_ESTABLISHED:
+		c.ReliableWriterHandler.HandlePacket(packet, tcp)
+
+		if tcp.FIN {
+			c.conn.setClosed(false)
+		} else if tcp.RST {
+			c.conn.setClosed(false)
+			return nil
+		} else if len(tcp.Payload) == 0 {
+			return nil
+		}
+
+		// TODO
+
+	case c.conn.State == TCP_CONNECTION_FINISHED:
+		c.conn.Instance.RemoveListener(c.conn)
+	}
+
+	return nil
+}
+
+type NetConnWrapper struct {
+	*AckHandler
+}
+
+var _ net.Conn = &NetConnWrapper{}
+
+func (c NetConnWrapper) Read(b []byte) (n int, err error) {
+	// TODO: implement
+
+	time.Sleep(time.Second)
+
+	return 0, io.EOF
+}
+
+func (c NetConnWrapper) LocalAddr() net.Addr {
+	_, src, _, srcPort, _ := c.AckHandler.conn.ConnectionTuple()
+
+	return &net.TCPAddr{
+		IP:   src,
+		Port: int(srcPort),
+	}
+}
+
+func (c NetConnWrapper) RemoteAddr() net.Addr {
+	_, _, dst, _, dstPort := c.AckHandler.conn.ConnectionTuple()
+
+	return &net.TCPAddr{
+		IP:   dst,
+		Port: int(dstPort),
+	}
+}
+
+func (c NetConnWrapper) SetDeadline(t time.Time) error {
+	return nil
+}
+
+func (c NetConnWrapper) SetReadDeadline(t time.Time) error {
+	return nil
+}
+
+func (c NetConnWrapper) SetWriteDeadline(t time.Time) error {
 	return nil
 }

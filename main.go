@@ -18,18 +18,21 @@ import (
 
 	ehttp "egressguy/http"
 
+	utls "github.com/refraction-networking/utls"
+
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/routing"
 )
 
 func main() {
-	var workers int
+	var workers, requests int
 	var timeout time.Duration
 	var method, request, userAgent, resolve string
 	{
 		var timeoutStr string
 
 		flag.IntVar(&workers, "w", 50, "number of workers")
+		flag.IntVar(&requests, "n", 1, "number of requests per connection")
 		flag.StringVar(&timeoutStr, "t", "7s", "timeout")
 		flag.StringVar(&method, "m", "GET", "method")
 		flag.StringVar(&request, "r", "", "request url")
@@ -48,7 +51,7 @@ func main() {
 	var payload ehttp.HttpPayload
 	var addrs []net.IP
 	var port layers.TCPPort
-	var tls bool
+	var tlsConfig *utls.Config
 	{
 		req, err := http.NewRequest(method, request, nil)
 		if err != nil {
@@ -56,9 +59,8 @@ func main() {
 		}
 
 		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Connection", "close")
 
-		payload = ehttp.NewHttpPayload(req)
+		payload = ehttp.NewHttpPayload(req, uint32(requests))
 
 		// dns lookup
 		if resolve == "" {
@@ -94,7 +96,10 @@ func main() {
 			port = 80
 		case "https":
 			port = 443
-			tls = true
+
+			tlsConfig = &utls.Config{
+				ServerName: req.URL.Hostname(),
+			}
 		default:
 			log.Fatal("unsupported scheme")
 		}
@@ -117,7 +122,7 @@ func main() {
 
 	router, err := routing.New()
 	if err != nil {
-		log.Fatal("routing error:", err)
+		log.Fatal("routing error: ", err)
 	}
 
 	iface, gw, src, err := router.Route(net.IPv4(8, 9, 6, 4))
@@ -164,8 +169,23 @@ func main() {
 				sourcePort++
 				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
 
-				if tls {
+				if tlsConfig != nil {
 					log.Fatal("not implemented")
+					// h := NewAckHandler()
+
+					// go func() {
+					// 	w := NetConnWrapper{
+					// 		AckHandler: h,
+					// 	}
+
+					// 	conn := utls.UClient(&w, tlsConfig, utls.HelloChrome_120)
+
+					// 	if err := conn.Handshake(); err != nil {
+					// 		log.Println("\n TLS ERR:", err)
+					// 	}
+					// }()
+
+					// handler = h
 				} else {
 					h := NewAckHandler()
 					p := payload.GetPayload(ehttp.ALPN_HTTP1)
