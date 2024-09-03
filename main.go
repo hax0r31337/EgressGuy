@@ -202,7 +202,7 @@ func main() {
 						ReliableReaderHandler: h,
 					}
 
-					tconn := utls.UClient(&w, tlsConfig, utls.HelloChrome_120)
+					tconn := utls.UClient(&w, tlsConfig, utls.HelloChrome_Auto)
 
 					if err := tconn.Handshake(); err != nil {
 						conn.Close()
@@ -221,6 +221,8 @@ func main() {
 					}
 
 					tconn.Write(p)
+
+					w.ReliableReaderHandler = nil
 
 					// switch to AckHandler
 					conn.Win = 65535

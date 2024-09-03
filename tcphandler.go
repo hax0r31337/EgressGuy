@@ -506,6 +506,22 @@ type NetConnWrapper struct {
 
 var _ net.Conn = &NetConnWrapper{}
 
+func (c NetConnWrapper) Read(b []byte) (n int, err error) {
+	if c.ReliableReaderHandler == nil {
+		return 0, net.ErrClosed
+	}
+
+	return c.ReliableReaderHandler.Read(b)
+}
+
+func (c NetConnWrapper) Write(b []byte) (n int, err error) {
+	if c.ReliableReaderHandler == nil {
+		return 0, net.ErrClosed
+	}
+
+	return c.ReliableReaderHandler.Write(b)
+}
+
 func (c NetConnWrapper) LocalAddr() net.Addr {
 	_, src, _, srcPort, _ := c.ReliableWriterHandler.conn.ConnectionTuple()
 
