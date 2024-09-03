@@ -17,7 +17,7 @@ const (
 	TCP_CONNECTION_FINISHED
 )
 
-const TCP_WINDOW_SCALE uint8 = 14
+const TCP_WINDOW_SCALE uint8 = 9
 
 type TcpConn struct {
 	TcpHandler
@@ -164,6 +164,6 @@ func (c *TcpConn) HandlePacket(packet gopacket.Packet, layer gopacket.Layer) {
 
 	err := c.TcpHandler.HandlePacket(packet, layer.(*layers.TCP))
 	if err != nil {
-		log.Fatal(err)
+		log.Println("tcp handler: ", err)
 	}
 }

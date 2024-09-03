@@ -1,8 +1,10 @@
 package main
 
 import (
-	"io"
+	"errors"
 	"net"
+	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -38,6 +40,10 @@ func NewReliableWriterHandler() *ReliableWriterHandler {
 
 func (c *ReliableWriterHandler) SetConn(conn *TcpConn) {
 	c.conn = conn
+
+	if conn == nil {
+		return
+	}
 
 	c.serverWindowScale = 1
 	c.serverSeq = conn.Seq
@@ -186,6 +192,10 @@ func NewAckHandlerWithReliableWriterHandler(h *ReliableWriterHandler) *AckHandle
 func (c *AckHandler) SetConn(conn *TcpConn) {
 	c.ReliableWriterHandler.SetConn(conn)
 
+	if conn == nil {
+		return
+	}
+
 	c.cachedAck = conn.NewPacket()
 	c.cachedAck.ACK = true
 }
@@ -260,11 +270,17 @@ type ReliableReaderHandler struct {
 	windowSizeScaled uint32
 	offset           uint32
 
-	buf          []byte
-	bufLock      sync.Mutex
-	bufFulfilled uint
+	buf      []byte
+	bufLock  sync.Mutex
+	segments []tcpSegment
 
-	recv chan struct{}
+	recv         chan struct{}
+	readDeadline time.Time
+}
+
+type tcpSegment struct {
+	start uint32
+	end   uint32
 }
 
 func NewReliableReaderHandler() *ReliableReaderHandler {
@@ -277,19 +293,24 @@ func NewReliableReaderHandler() *ReliableReaderHandler {
 
 func NewReliableReaderHandlerWithReliableWriterHandler(h *ReliableWriterHandler) *ReliableReaderHandler {
 	scale := uint32(1) << TCP_WINDOW_SCALE
-	w := (0xffff / scale) * scale
+	w := (0x10000 / scale) * scale
 
 	return &ReliableReaderHandler{
 		ReliableWriterHandler: h,
 		windowSize:            uint16(w / scale),
 		windowSizeScaled:      w,
 		buf:                   make([]byte, 0, w<<1),
-		recv:                  make(chan struct{}),
+		segments:              make([]tcpSegment, 0, 16),
+		recv:                  make(chan struct{}, 1),
 	}
 }
 
 func (c *ReliableReaderHandler) SetConn(conn *TcpConn) {
 	c.ReliableWriterHandler.SetConn(conn)
+
+	if conn == nil {
+		return
+	}
 
 	c.offset = conn.Ack
 }
@@ -318,6 +339,8 @@ func (c *ReliableReaderHandler) HandlePacket(packet gopacket.Packet, tcp *layers
 
 		c.conn.Seq++
 		c.conn.Ack++
+
+		// advertise a reasonable window size to the server
 		c.conn.Win = c.windowSize
 
 		// although it's not a common case
@@ -339,8 +362,64 @@ func (c *ReliableReaderHandler) HandlePacket(packet gopacket.Packet, tcp *layers
 			return nil
 		}
 
-		// TODO
+		c.bufLock.Lock()
+		defer c.bufLock.Unlock()
 
+		if tcp.Seq < c.offset {
+			if tcp.Seq+uint32(len(tcp.Payload)) > c.offset {
+				s := c.offset - tcp.Seq
+				tcp.Payload = tcp.Payload[s:]
+				tcp.Seq += s
+			} else {
+				return nil
+			}
+		}
+
+		// drop packet if it's out of window
+		// it might be a retransmission or bad packet
+		extend := tcp.Seq - c.offset + uint32(len(tcp.Payload))
+		if extend > uint32(len(c.buf))+c.windowSizeScaled {
+			return errors.New("out of window")
+		}
+
+		// extend buffer if necessary
+		if extend > uint32(len(c.buf)) {
+			c.buf = append(c.buf, make([]byte, extend-uint32(len(c.buf)))...)
+		}
+
+		segment := tcpSegment{
+			start: tcp.Seq - c.offset,
+		}
+		segment.end = segment.start + uint32(len(tcp.Payload))
+
+		// check if it's a duplicate segment
+		for _, s := range c.segments {
+			if segment.start >= s.start && segment.end <= s.end {
+				return nil
+			}
+		}
+
+		copy(c.buf[tcp.Seq-c.offset:], tcp.Payload)
+		c.segments = append(c.segments, segment)
+
+		previousAck := c.conn.Ack
+
+		c.mergeSegments()
+
+		// send ack if necessary
+		if c.conn.Ack > previousAck {
+			ack := c.conn.NewPacket()
+			ack.ACK = true
+
+			if err := c.conn.SendPacket(&ack, nil); err != nil {
+				return err
+			}
+
+			// notify reader
+			go func() {
+				c.recv <- struct{}{}
+			}()
+		}
 	case c.conn.State == TCP_CONNECTION_FINISHED:
 		c.conn.Instance.RemoveListener(c.conn)
 	}
@@ -348,22 +427,87 @@ func (c *ReliableReaderHandler) HandlePacket(packet gopacket.Packet, tcp *layers
 	return nil
 }
 
+// this function expects that the buffer mutex is locked
+func (c *ReliableReaderHandler) mergeSegments() {
+	sort.Slice(c.segments, func(i, j int) bool {
+		return c.segments[i].start < c.segments[j].start
+	})
+
+	// merge segments and advance buffer
+	idx := -1
+	fulfilled := c.conn.Ack - c.offset
+	for i, s := range c.segments {
+		if s.start <= fulfilled {
+			fulfilled = max(fulfilled, s.end)
+			idx = i
+		}
+	}
+
+	if idx != -1 {
+		c.segments = c.segments[idx+1:]
+	}
+
+	c.conn.Ack = fulfilled + c.offset
+}
+
+func (c *ReliableReaderHandler) Read(b []byte) (n int, err error) {
+	if c.conn == nil || c.conn.State == TCP_CONNECTION_FINISHED {
+		return 0, net.ErrClosed
+	}
+
+	if !c.readDeadline.IsZero() {
+		if time.Now().After(c.readDeadline) {
+			return 0, os.ErrDeadlineExceeded
+		}
+
+		deadline := time.After(time.Until(c.readDeadline))
+		select {
+		case <-c.recv:
+		case <-c.conn.onClose:
+			return 0, net.ErrClosed
+		case <-deadline:
+			return 0, os.ErrDeadlineExceeded
+		}
+	} else {
+		select {
+		case <-c.recv:
+		case <-c.conn.onClose:
+			return 0, net.ErrClosed
+		}
+	}
+
+	c.bufLock.Lock()
+	defer c.bufLock.Unlock()
+
+	toRead := min(c.conn.Ack-c.offset, uint32(len(b)))
+	copy(b, c.buf[:toRead])
+
+	// advance buffer
+	c.buf = c.buf[toRead:]
+	c.offset += toRead
+
+	for i := 0; i < len(c.segments); i++ {
+		c.segments[i].start -= toRead
+		c.segments[i].end -= toRead
+	}
+
+	return int(toRead), nil
+}
+
+func (c *ReliableReaderHandler) SetReadDeadline(t time.Time) error {
+	c.readDeadline = t
+
+	return nil
+}
+
 type NetConnWrapper struct {
-	*AckHandler
+	*ReliableReaderHandler
 }
 
 var _ net.Conn = &NetConnWrapper{}
 
-func (c NetConnWrapper) Read(b []byte) (n int, err error) {
-	// TODO: implement
-
-	time.Sleep(time.Second)
-
-	return 0, io.EOF
-}
-
 func (c NetConnWrapper) LocalAddr() net.Addr {
-	_, src, _, srcPort, _ := c.AckHandler.conn.ConnectionTuple()
+	_, src, _, srcPort, _ := c.ReliableWriterHandler.conn.ConnectionTuple()
 
 	return &net.TCPAddr{
 		IP:   src,
@@ -372,7 +516,7 @@ func (c NetConnWrapper) LocalAddr() net.Addr {
 }
 
 func (c NetConnWrapper) RemoteAddr() net.Addr {
-	_, _, dst, _, dstPort := c.AckHandler.conn.ConnectionTuple()
+	_, _, dst, _, dstPort := c.ReliableWriterHandler.conn.ConnectionTuple()
 
 	return &net.TCPAddr{
 		IP:   dst,
@@ -384,10 +528,10 @@ func (c NetConnWrapper) SetDeadline(t time.Time) error {
 	return nil
 }
 
-func (c NetConnWrapper) SetReadDeadline(t time.Time) error {
+func (c NetConnWrapper) SetWriteDeadline(t time.Time) error {
 	return nil
 }
 
-func (c NetConnWrapper) SetWriteDeadline(t time.Time) error {
+func (c NetConnWrapper) Close() error {
 	return nil
 }

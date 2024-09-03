@@ -170,22 +170,9 @@ func main() {
 				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
 
 				if tlsConfig != nil {
-					log.Fatal("not implemented")
-					// h := NewAckHandler()
+					h := NewReliableReaderHandler()
 
-					// go func() {
-					// 	w := NetConnWrapper{
-					// 		AckHandler: h,
-					// 	}
-
-					// 	conn := utls.UClient(&w, tlsConfig, utls.HelloChrome_120)
-
-					// 	if err := conn.Handshake(); err != nil {
-					// 		log.Println("\n TLS ERR:", err)
-					// 	}
-					// }()
-
-					// handler = h
+					handler = h
 				} else {
 					h := NewAckHandler()
 					p := payload.GetPayload(ehttp.ALPN_HTTP1)
@@ -204,8 +191,47 @@ func main() {
 					log.Fatal(err)
 				}
 
+				timeoutChan := time.After(timeout)
+
+				if tlsConfig != nil {
+					h := handler.(*ReliableReaderHandler)
+
+					h.SetReadDeadline(time.Now().Add(timeout))
+
+					w := NetConnWrapper{
+						ReliableReaderHandler: h,
+					}
+
+					tconn := utls.UClient(&w, tlsConfig, utls.HelloChrome_120)
+
+					if err := tconn.Handshake(); err != nil {
+						conn.Close()
+						continue
+					}
+
+					alpn := tconn.ConnectionState().NegotiatedProtocol
+					if alpn == "" {
+						alpn = ehttp.ALPN_HTTP1
+					}
+
+					p := payload.GetPayload(alpn)
+					if p == nil {
+						conn.Close()
+						continue
+					}
+
+					tconn.Write(p)
+
+					// switch to AckHandler
+					conn.Win = 65535
+					handler = NewAckHandlerWithReliableWriterHandler(h.ReliableWriterHandler)
+					conn.SetHandler(handler)
+
+					tconn.Close()
+				}
+
 				select {
-				case <-time.After(timeout):
+				case <-timeoutChan:
 					conn.Close()
 				case <-conn.onClose:
 					completed++
