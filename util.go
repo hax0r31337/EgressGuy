@@ -82,7 +82,9 @@ func GetHwAddr(handle *pcap.Handle, iface *net.Interface, src net.IP, gw net.IP)
 }
 
 func HumanizeBytes(bytes uint64) string {
-	if bytes > 1<<30 {
+	if bytes > 1<<40 {
+		return fmt.Sprintf("%.2f TiB", float64(bytes)/(1<<40))
+	} else if bytes > 1<<30 {
 		return fmt.Sprintf("%.2f GiB", float64(bytes)/(1<<30))
 	} else if bytes > 1<<20 {
 		return fmt.Sprintf("%.2f MiB", float64(bytes)/(1<<20))

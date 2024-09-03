@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/rand"
 	"flag"
@@ -17,23 +16,28 @@ import (
 	"time"
 	"unsafe"
 
+	ehttp "egressguy/http"
+
+	utls "github.com/refraction-networking/utls"
+
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/routing"
 )
 
 func main() {
-	var workers int
+	var workers, requests int
 	var timeout time.Duration
 	var method, request, userAgent, resolve string
 	{
 		var timeoutStr string
 
 		flag.IntVar(&workers, "w", 50, "number of workers")
-		flag.StringVar(&timeoutStr, "t", "7s", "timeout")
+		flag.IntVar(&requests, "n", 3, "number of requests per connection")
+		flag.StringVar(&timeoutStr, "t", "10s", "timeout")
 		flag.StringVar(&method, "m", "GET", "method")
-		flag.StringVar(&request, "r", "", "request")
+		flag.StringVar(&request, "r", "", "request url")
 		flag.StringVar(&userAgent, "u", "EgressGuy/1.0", "user agent")
-		flag.StringVar(&resolve, "d", "", "resolve override (file)")
+		flag.StringVar(&resolve, "d", "", "resolve override (file or ip)")
 
 		flag.Parse()
 
@@ -44,9 +48,10 @@ func main() {
 		}
 	}
 
-	var payload []byte
+	var payload ehttp.HttpPayload
 	var addrs []net.IP
 	var port layers.TCPPort
+	var tlsConfig *utls.Config
 	{
 		req, err := http.NewRequest(method, request, nil)
 		if err != nil {
@@ -54,15 +59,8 @@ func main() {
 		}
 
 		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Connection", "close")
 
-		var buf bytes.Buffer
-
-		if err := req.Write(&buf); err != nil {
-			log.Fatal(err)
-		}
-
-		payload = buf.Bytes()
+		payload = ehttp.NewHttpPayload(req, uint32(requests))
 
 		// dns lookup
 		if resolve == "" {
@@ -72,6 +70,8 @@ func main() {
 			} else if len(addrs) == 0 {
 				log.Fatal("no ipv4 address found")
 			}
+		} else if addr := net.ParseIP(resolve); addr != nil {
+			addrs = []net.IP{addr}
 		} else {
 			f, err := os.Open(resolve)
 			if err != nil {
@@ -96,6 +96,10 @@ func main() {
 			port = 80
 		case "https":
 			port = 443
+
+			tlsConfig = &utls.Config{
+				ServerName: req.URL.Hostname(),
+			}
 		default:
 			log.Fatal("unsupported scheme")
 		}
@@ -110,10 +114,17 @@ func main() {
 		}
 	}
 
+	if len(addrs) == 0 {
+		log.Fatal("no address found")
+	} else if workers == 0 {
+		log.Fatal("no workers")
+	}
+
 	router, err := routing.New()
 	if err != nil {
-		log.Fatal("routing error:", err)
+		log.Fatal("routing error: ", err)
 	}
+
 	iface, gw, src, err := router.Route(net.IPv4(8, 9, 6, 4))
 	if err != nil {
 		log.Fatal(err)
@@ -151,12 +162,28 @@ func main() {
 
 	for range workers {
 		go func() {
+			var handler TcpHandler
+
 			for {
 				dialLock.Lock()
 				sourcePort++
 				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
 
-				handler := NewPayloadAckHandler(payload)
+				if tlsConfig != nil {
+					h := NewReliableReaderHandler()
+
+					handler = h
+				} else {
+					h := NewAckHandler()
+					p := payload.GetPayload(ehttp.ALPN_HTTP1)
+					if p == nil {
+						continue
+					}
+
+					h.Write(p)
+
+					handler = h
+				}
 
 				conn, err := NewTcpConn(eg, src, addr, sourcePort, port, handler)
 				dialLock.Unlock()
@@ -164,11 +191,51 @@ func main() {
 					log.Fatal(err)
 				}
 
+				timeoutChan := time.After(timeout)
+
+				if tlsConfig != nil {
+					h := handler.(*ReliableReaderHandler)
+
+					h.SetReadDeadline(time.Now().Add(timeout))
+
+					w := NetConnWrapper{
+						ReliableReaderHandler: h,
+					}
+
+					tconn := utls.UClient(&w, tlsConfig, utls.HelloChrome_Auto)
+
+					if err := tconn.Handshake(); err != nil {
+						conn.Close()
+						continue
+					}
+
+					alpn := tconn.ConnectionState().NegotiatedProtocol
+					if alpn == "" {
+						alpn = ehttp.ALPN_HTTP1
+					}
+
+					p := payload.GetPayload(alpn)
+					if p == nil {
+						conn.Close()
+						continue
+					}
+
+					tconn.Write(p)
+
+					w.ReliableReaderHandler = nil
+
+					// switch to AckHandler
+					conn.Win = 65535
+					handler = NewAckHandlerWithReliableWriterHandler(h.ReliableWriterHandler)
+					conn.SetHandler(handler)
+
+					tconn.Close()
+				}
+
 				select {
-				case <-time.After(timeout):
+				case <-timeoutChan:
 					conn.Close()
 				case <-conn.onClose:
-
 					completed++
 				}
 			}
