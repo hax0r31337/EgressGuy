@@ -32,8 +32,8 @@ func main() {
 		var timeoutStr string
 
 		flag.IntVar(&workers, "w", 50, "number of workers")
-		flag.IntVar(&requests, "n", 1, "number of requests per connection")
-		flag.StringVar(&timeoutStr, "t", "7s", "timeout")
+		flag.IntVar(&requests, "n", 3, "number of requests per connection")
+		flag.StringVar(&timeoutStr, "t", "10s", "timeout")
 		flag.StringVar(&method, "m", "GET", "method")
 		flag.StringVar(&request, "r", "", "request url")
 		flag.StringVar(&userAgent, "u", "EgressGuy/1.0", "user agent")
