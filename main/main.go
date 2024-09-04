@@ -17,19 +17,16 @@ import (
 	"unsafe"
 
 	"github.com/hax0r31337/egressguy"
-
 	ehttp "github.com/hax0r31337/egressguy/http"
 
+	"github.com/gopacket/gopacket/layers"
 	utls "github.com/refraction-networking/utls"
-
-	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/routing"
 )
 
 func main() {
 	var workers, requests int
 	var timeout time.Duration
-	var method, request, userAgent, resolve string
+	var method, request, userAgent, resolve, ifaceName string
 	{
 		var timeoutStr string
 
@@ -40,6 +37,7 @@ func main() {
 		flag.StringVar(&request, "r", "", "request url")
 		flag.StringVar(&userAgent, "u", "EgressGuy/1.0", "user agent")
 		flag.StringVar(&resolve, "d", "", "resolve override (file or ip)")
+		flag.StringVar(&ifaceName, "i", "", "routing interface")
 
 		flag.Parse()
 
@@ -122,14 +120,9 @@ func main() {
 		log.Fatal("no workers")
 	}
 
-	router, err := routing.New()
+	iface, gw, src, err := egressguy.GetRoutingInfo(ifaceName, addrs[0])
 	if err != nil {
 		log.Fatal("routing error: ", err)
-	}
-
-	iface, gw, src, err := router.Route(net.IPv4(8, 9, 6, 4))
-	if err != nil {
-		log.Fatal(err)
 	}
 
 	eg, err := egressguy.NewEgressGuy(iface, src, gw)

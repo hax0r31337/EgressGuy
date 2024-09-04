@@ -6,9 +6,10 @@ import (
 	"net"
 	"time"
 
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/pcap"
+	"github.com/gopacket/gopacket"
+	"github.com/gopacket/gopacket/layers"
+	"github.com/gopacket/gopacket/pcap"
+	"github.com/gopacket/gopacket/routing"
 )
 
 var GOPACKETS_OPTS = gopacket.SerializeOptions{
@@ -78,5 +79,32 @@ func HumanizeBytes(bytes uint64) string {
 		return fmt.Sprintf("%.2f KiB", float64(bytes)/(1<<10))
 	} else {
 		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+func GetRoutingInfo(ifaceName string, dst net.IP) (*net.Interface, net.IP, net.IP, error) {
+	router, err := routing.New()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if ifaceName == "" {
+		return router.Route(dst)
+	} else {
+		iface, err := net.InterfaceByName(ifaceName)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		iface, gw, src, err := router.RouteWithSrc(iface.HardwareAddr, nil, dst)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		if iface.Name != ifaceName {
+			return nil, nil, nil, errors.New("failed to route through the specified interface")
+		}
+
+		return iface, gw, src, nil
 	}
 }
