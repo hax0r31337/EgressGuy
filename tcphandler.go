@@ -1,4 +1,4 @@
-package main
+package egressguy
 
 import (
 	"errors"
@@ -463,7 +463,7 @@ func (c *ReliableReaderHandler) Read(b []byte) (n int, err error) {
 		deadline := time.After(time.Until(c.readDeadline))
 		select {
 		case <-c.recv:
-		case <-c.conn.onClose:
+		case <-c.conn.OnClose():
 			return 0, net.ErrClosed
 		case <-deadline:
 			return 0, os.ErrDeadlineExceeded
@@ -471,7 +471,7 @@ func (c *ReliableReaderHandler) Read(b []byte) (n int, err error) {
 	} else {
 		select {
 		case <-c.recv:
-		case <-c.conn.onClose:
+		case <-c.conn.OnClose():
 			return 0, net.ErrClosed
 		}
 	}

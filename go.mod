@@ -1,4 +1,4 @@
-module egressguy
+module github.com/hax0r31337/egressguy
 
 go 1.23.0
 

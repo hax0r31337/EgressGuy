@@ -6,12 +6,12 @@ Generates egress bills to whose using S3 bucket to serve BLOBs.
 
 ```bash
 # build the binary
-go build -v -trimpath -ldflags "-s -w -buildid=" .
+go build -v -trimpath -ldflags "-s -w -buildid=" -o egressguy ./main
 
 # print usage
 ./egressguy -h
 
-./egressguy -r "http://h55na.gdl.easebar.com/identityv_setup_release_oversea_0112.exe"
+sudo ./egressguy -r "http://h55na.gdl.easebar.com/identityv_setup_release_oversea_0112.exe"
 ```
 
 ## How it works

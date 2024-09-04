@@ -16,7 +16,9 @@ import (
 	"time"
 	"unsafe"
 
-	ehttp "egressguy/http"
+	"github.com/hax0r31337/egressguy"
+
+	ehttp "github.com/hax0r31337/egressguy/http"
 
 	utls "github.com/refraction-networking/utls"
 
@@ -130,7 +132,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	eg, err := NewEgressGuy(iface, src, gw)
+	eg, err := egressguy.NewEgressGuy(iface, src, gw)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -151,7 +153,7 @@ func main() {
 			traf := total - lastTraffic
 			lastTraffic = total
 
-			fmt.Printf(str, HumanizeBytes(traf), HumanizeBytes(total), completed, time.Since(start).String())
+			fmt.Printf(str, egressguy.HumanizeBytes(traf), egressguy.HumanizeBytes(total), completed, time.Since(start).String())
 		}
 	}()
 
@@ -162,7 +164,7 @@ func main() {
 
 	for range workers {
 		go func() {
-			var handler TcpHandler
+			var handler egressguy.TcpHandler
 
 			for {
 				dialLock.Lock()
@@ -170,11 +172,11 @@ func main() {
 				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
 
 				if tlsConfig != nil {
-					h := NewReliableReaderHandler()
+					h := egressguy.NewReliableReaderHandler()
 
 					handler = h
 				} else {
-					h := NewAckHandler()
+					h := egressguy.NewAckHandler()
 					p := payload.GetPayload(ehttp.ALPN_HTTP1)
 					if p == nil {
 						continue
@@ -185,7 +187,7 @@ func main() {
 					handler = h
 				}
 
-				conn, err := NewTcpConn(eg, src, addr, sourcePort, port, handler)
+				conn, err := egressguy.NewTcpConn(eg, src, addr, sourcePort, port, handler)
 				dialLock.Unlock()
 				if err != nil {
 					log.Fatal(err)
@@ -194,11 +196,11 @@ func main() {
 				timeoutChan := time.After(timeout)
 
 				if tlsConfig != nil {
-					h := handler.(*ReliableReaderHandler)
+					h := handler.(*egressguy.ReliableReaderHandler)
 
 					h.SetReadDeadline(time.Now().Add(timeout))
 
-					w := NetConnWrapper{
+					w := egressguy.NetConnWrapper{
 						ReliableReaderHandler: h,
 					}
 
@@ -226,7 +228,7 @@ func main() {
 
 					// switch to AckHandler
 					conn.Win = 65535
-					handler = NewAckHandlerWithReliableWriterHandler(h.ReliableWriterHandler)
+					handler = egressguy.NewAckHandlerWithReliableWriterHandler(h.ReliableWriterHandler)
 					conn.SetHandler(handler)
 
 					tconn.Close()
@@ -235,7 +237,7 @@ func main() {
 				select {
 				case <-timeoutChan:
 					conn.Close()
-				case <-conn.onClose:
+				case <-conn.OnClose():
 					completed++
 				}
 			}
