@@ -146,7 +146,7 @@ func main() {
 			traf := total - lastTraffic
 			lastTraffic = total
 
-			fmt.Printf(str, egressguy.HumanizeBytes(traf), egressguy.HumanizeBytes(total), completed, time.Since(start).String())
+			fmt.Printf(str, egressguy.HumanizeBytes(traf), egressguy.HumanizeBytes(total), completed, time.Since(start).Round(time.Second).String())
 		}
 	}()
 
