@@ -1,5 +1,7 @@
 package main
 
+import "fmt"
+
 const (
 	ANSI_ERASE_LINE = "\x1b[2K\r"
 	ANSI_RESET      = "\x1b[0m"
@@ -13,3 +15,14 @@ const (
 	ANSI_CYAN   = "\x1b[36m"
 	ANSI_WHITE  = "\x1b[37m"
 )
+
+type FlagStringSlice []string
+
+func (f *FlagStringSlice) String() string {
+	return fmt.Sprintf("%v", *f)
+}
+
+func (f *FlagStringSlice) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}

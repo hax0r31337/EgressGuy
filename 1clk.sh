@@ -15,11 +15,11 @@ fi
 
 # we had to notify the user for every command that requires root privileges
 privileged_command() {
-    echo "Executing command: $1"
+    echo "Executing command: $@"
     if [ "$EUID" -ne 0 ]; then
-        sudo $1
+        sudo $@
     else
-        $1
+        $@
     fi
 }
 

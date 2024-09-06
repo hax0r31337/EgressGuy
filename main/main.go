@@ -26,7 +26,8 @@ import (
 func main() {
 	var workers, requests int
 	var timeout time.Duration
-	var method, request, userAgent, resolve, ifaceName string
+	var method, request, resolve, ifaceName string
+	var headers FlagStringSlice
 	{
 		var timeoutStr string
 
@@ -35,9 +36,9 @@ func main() {
 		flag.StringVar(&timeoutStr, "t", "10s", "timeout")
 		flag.StringVar(&method, "m", "GET", "method")
 		flag.StringVar(&request, "r", "", "request url")
-		flag.StringVar(&userAgent, "u", "EgressGuy/1.0", "user agent")
 		flag.StringVar(&resolve, "d", "", "resolve override (file or ip)")
 		flag.StringVar(&ifaceName, "i", "", "routing interface")
+		flag.Var(&headers, "H", "headers")
 
 		flag.Parse()
 
@@ -63,7 +64,15 @@ func main() {
 			log.Fatal(err)
 		}
 
-		req.Header.Set("User-Agent", userAgent)
+		req.Header.Set("User-Agent", "EgressGuy/1.0")
+		for _, h := range headers {
+			parts := strings.SplitN(h, ":", 2)
+			if len(parts) != 2 {
+				log.Fatal("invalid header")
+			}
+
+			req.Header.Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+		}
 
 		payload = ehttp.NewHttpPayload(req, uint32(requests))
 
