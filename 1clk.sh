@@ -17,18 +17,18 @@ fi
 privileged_command() {
     echo "Executing command: $@"
     if [ "$EUID" -ne 0 ]; then
-        sudo $@
+        sudo $@ || exit 1
     else
-        $@
+        $@ || exit 1
     fi
 }
 
 # check whether libpcap is installed
-if [ ! -f /usr/lib/libpcap.so ]; then
+if [ ! -f /usr/include/pcap.h ] && [ ! -f /usr/share/licenses/libpcap/LICENSE ] && [ ! -f /usr/lib/libpcap.so ]; then
     if [ -f /etc/debian_version ]; then
         privileged_command "apt install libpcap-dev"
     elif [ -f /etc/redhat-release ]; then
-        privileged_command "yum install libpcap-devel"
+        privileged_command "yum install libpcap"
     elif [ -f /etc/arch-release ]; then
         privileged_command "pacman -S libpcap"
     else
