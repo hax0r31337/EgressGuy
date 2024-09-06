@@ -4,6 +4,14 @@ Generates egress bills to whose using S3 bucket to serve BLOBs.
 
 ## How to use
 
+### One-click script
+
+```bash
+bash <(curl -L -s https://raw.githubusercontent.com/hax0r31337/EgressGuy/main/1clk.sh) -r "http://example.com/somefile"
+```
+
+### Build manually
+
 ```bash
 # build the binary
 go build -v -trimpath -ldflags "-s -w -buildid=" -o egressguy ./main
@@ -11,7 +19,7 @@ go build -v -trimpath -ldflags "-s -w -buildid=" -o egressguy ./main
 # print usage
 ./egressguy -h
 
-sudo ./egressguy -r "http://h55na.gdl.easebar.com/identityv_setup_release_oversea_0112.exe"
+sudo ./egressguy -r "http://example.com/somefile"
 ```
 
 ## How it works

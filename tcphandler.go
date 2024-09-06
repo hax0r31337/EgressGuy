@@ -308,10 +308,13 @@ func NewReliableReaderHandlerWithReliableWriterHandler(h *ReliableWriterHandler)
 func (c *ReliableReaderHandler) SetConn(conn *TcpConn) {
 	c.ReliableWriterHandler.SetConn(conn)
 
+	close(c.recv)
+
 	if conn == nil {
 		return
 	}
 
+	c.recv = make(chan struct{}, 1)
 	c.offset = conn.Ack
 }
 
