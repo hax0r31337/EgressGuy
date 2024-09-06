@@ -41,6 +41,11 @@ func main() {
 
 		flag.Parse()
 
+		if request == "" {
+			flag.Usage()
+			return
+		}
+
 		var err error
 		timeout, err = time.ParseDuration(timeoutStr)
 		if err != nil {
