@@ -1,4 +1,4 @@
-version="1.0.0"
+version="1.0.1"
 installation_path="$HOME/.local/bin/egressguy"
 version_file="$installation_path/.version"
 binary_file="$installation_path/release"
