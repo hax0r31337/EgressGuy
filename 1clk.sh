@@ -41,20 +41,18 @@ download_latest_release() {
     curl https://github.com/hax0r31337/egressguy/releases/download/$version/egressguy_linux_$goarch -L -o $binary_file || exit 1
 
     # check ELF header to ensure the binary is valid
-    readelf -h $binary_file > /dev/null
-
-    if [ $? -eq 0 ]; then
-        chmod +x $binary_file
-        echo $version > $version_file
-    else
+    if [ "$(head -c 4 $binary_file)" != $'\x7fELF' ]; then
         echo "Failed to download egressguy binary."
         rm -f $binary_file
         exit 1
     fi
+
+    chmod +x $binary_file
+    echo $version > $version_file
 }
 
 # download binary from github releases
-if [ ! -f $version_file ]; then
+if [ ! -f $version_file ] || [ ! -f $binary_file ]; then
     mkdir -p $installation_path
     download_latest_release
 else

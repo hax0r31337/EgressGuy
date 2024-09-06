@@ -257,7 +257,7 @@ func main() {
 				case <-timeoutChan:
 					conn.Close()
 				case <-conn.OnClose():
-					completed++
+					completed += uint64(requests)
 				}
 			}
 		}()
