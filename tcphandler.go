@@ -224,10 +224,10 @@ func (c *AckHandler) HandlePacket(packet gopacket.Packet, tcp *layers.TCP) error
 		c.counter = c.lastCounter + 1
 		c.lastCounter = max(c.counter, 5)
 
-		c.conn.Ack = tcp.Seq
+		c.conn.Ack = tcp.Seq + uint32(len(tcp.Payload))
 
 		c.cachedAck.Seq = c.conn.Seq
-		c.cachedAck.Ack = tcp.Seq
+		c.cachedAck.Ack = c.conn.Ack
 
 		if err := c.conn.SendPacket(&c.cachedAck, nil); err != nil {
 			return err
