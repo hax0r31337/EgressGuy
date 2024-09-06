@@ -6,8 +6,8 @@ binary_file="$installation_path/release"
 # check cpu architecture
 if [ "$(uname -m)" == "x86_64" ]; then
     goarch="amd64"
-elif [ "$(uname -m)" == "aarch64" ]; then
-    goarch="arm64"
+# elif [ "$(uname -m)" == "aarch64" ]; then
+#     goarch="arm64"
 else
     echo "Unsupported architecture: $(uname -m), please install manually."
     exit 1
