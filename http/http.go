@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"log"
 	"net/http"
+	"net/url"
 	"sync"
+	"time"
 
 	"golang.org/x/net/http2"
 )
@@ -90,4 +92,36 @@ func (h *HttpPayload) GetPayload(alpn string) []byte {
 		log.Println("unknown alpn:", alpn)
 		return nil
 	}
+}
+
+func ProbeRedirects(req *http.Request) error {
+	var err error
+	var resp *http.Response
+
+	client := http.Client{
+		// we want to handle redirects manually
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	for resp == nil || resp.Header.Get("Location") != "" {
+		resp, err = client.Do(req)
+		if err != nil {
+			return err
+		}
+
+		if location := resp.Header.Get("Location"); location != "" {
+			u, err := url.Parse(location)
+			if err != nil {
+				return err
+			}
+
+			req.URL = u
+			req.Host = u.Host
+		}
+	}
+
+	return nil
 }

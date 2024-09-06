@@ -28,6 +28,7 @@ func main() {
 	var timeout time.Duration
 	var method, request, resolve, ifaceName string
 	var headers FlagStringSlice
+	var followRedirects bool
 	{
 		var timeoutStr string
 
@@ -39,6 +40,7 @@ func main() {
 		flag.StringVar(&resolve, "d", "", "resolve override (file or ip)")
 		flag.StringVar(&ifaceName, "i", "", "routing interface")
 		flag.Var(&headers, "H", "headers")
+		flag.BoolVar(&followRedirects, "f", false, "follow redirects")
 
 		flag.Parse()
 
@@ -72,6 +74,16 @@ func main() {
 			}
 
 			req.Header.Set(strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]))
+		}
+
+		if followRedirects {
+			print("probing for redirects...")
+
+			if err := ehttp.ProbeRedirects(req); err != nil {
+				log.Fatal("failed to probe for redirects: ", err)
+			}
+
+			print(ANSI_ERASE_LINE)
 		}
 
 		payload = ehttp.NewHttpPayload(req, uint32(requests))

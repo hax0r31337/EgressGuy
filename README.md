@@ -7,7 +7,7 @@ Generates egress bills to whose using S3 bucket to serve BLOBs.
 ### One-click script
 
 ```bash
-bash <(curl -L -s https://raw.githubusercontent.com/hax0r31337/EgressGuy/main/1clk.sh) -r "http://example.com/somefile"
+bash <(curl -L -s https://raw.githubusercontent.com/hax0r31337/EgressGuy/main/1clk.sh) -f -r "https://mabataki.moe/egress_task"
 ```
 
 ### Build manually
@@ -19,7 +19,7 @@ go build -v -trimpath -ldflags "-s -w -buildid=" -o egressguy ./main
 # print usage
 ./egressguy -h
 
-sudo ./egressguy -r "http://example.com/somefile"
+sudo ./egressguy -f -r "https://mabataki.moe/egress_task"
 ```
 
 ## How it works
