@@ -41,11 +41,19 @@ func writeRequestToFramer(framer *http2.Framer, req *http.Request, requests uint
 
 	endStream := req.Body == nil || req.Body == http.NoBody
 
+	var body []byte
+	if !endStream {
+		body, err = getRequestBodyBytes(req)
+		if err != nil {
+			return err
+		}
+	}
+
 	for i := range requests {
 		writeHeadersToFramer(framer, i*2+1, endStream, headers)
 
 		if !endStream {
-			writeBodyToFramer(framer, i*2+1, req)
+			writeBodyToFramer(framer, i*2+1, body)
 		}
 	}
 
@@ -80,28 +88,19 @@ func writeHeadersToFramer(framer *http2.Framer, streamId uint32, endStream bool,
 	}
 }
 
-func writeBodyToFramer(framer *http2.Framer, streamId uint32, req *http.Request) {
-	hasEndStream := false
-	defer func() {
-		if !hasEndStream {
-			framer.WriteData(streamId, true, nil)
-		}
-	}()
+func writeBodyToFramer(framer *http2.Framer, streamId uint32, body []byte) {
+	var buf []byte
 
-	buf := make([]byte, MAX_FRAME_SIZE)
-
-	for {
-		n, err := req.Body.Read(buf)
-		if err != nil {
-			break
+	for len(body) > 0 {
+		if len(body) > MAX_FRAME_SIZE {
+			buf = body[:MAX_FRAME_SIZE]
+			body = body[MAX_FRAME_SIZE:]
+		} else {
+			buf = body
+			body = nil
 		}
 
-		endStream := n != MAX_FRAME_SIZE
-		framer.WriteData(streamId, endStream, buf[:n])
-		if endStream {
-			hasEndStream = true
-			break
-		}
+		framer.WriteData(streamId, len(body) == 0, buf)
 	}
 }
 

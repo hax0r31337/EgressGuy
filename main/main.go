@@ -189,6 +189,8 @@ func main() {
 				dialLock.Lock()
 				sourcePort++
 				addr := addrs[uint16(sourcePort)%uint16(len(addrs))]
+				sp := sourcePort
+				dialLock.Unlock()
 
 				if tlsConfig != nil {
 					h := egressguy.NewReliableReaderHandler()
@@ -206,8 +208,7 @@ func main() {
 					handler = h
 				}
 
-				conn, err := egressguy.NewTcpConn(eg, src, addr, sourcePort, port, handler)
-				dialLock.Unlock()
+				conn, err := egressguy.NewTcpConn(eg, src, addr, sp, port, handler)
 				if err != nil {
 					log.Fatal(err)
 				}

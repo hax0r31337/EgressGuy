@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"crypto/rand"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -38,6 +39,15 @@ func (h *HttpPayload) getHttp1Payload() []byte {
 
 	r := h.NumRequests
 
+	var body []byte
+	if h.Request.Body != nil {
+		var err error
+		body, err = getRequestBodyBytes(h.Request)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
 	for r > 0 {
 		if r == 1 {
 			h.Request.Header.Set("Connection", "close")
@@ -47,6 +57,10 @@ func (h *HttpPayload) getHttp1Payload() []byte {
 
 		if err := h.Request.Write(&buf); err != nil {
 			log.Fatal(err)
+		}
+
+		if body != nil {
+			h.Request.Body = io.NopCloser(bytes.NewReader(body))
 		}
 
 		r--
@@ -72,19 +86,24 @@ func (h *HttpPayload) getHttp2Payload() []byte {
 }
 
 func (h *HttpPayload) GetPayload(alpn string) []byte {
-	h.payloadLock.Lock()
-	defer h.payloadLock.Unlock()
-
 	switch alpn {
 	case ALPN_HTTP1:
 		if h.cachedHttp1Payload == nil {
-			h.cachedHttp1Payload = h.getHttp1Payload()
+			h.payloadLock.Lock()
+			if h.cachedHttp1Payload == nil {
+				h.cachedHttp1Payload = h.getHttp1Payload()
+			}
+			h.payloadLock.Unlock()
 		}
 
 		return h.cachedHttp1Payload
 	case ALPN_HTTP2:
 		if h.cachedHttp2Payload == nil {
-			h.cachedHttp2Payload = h.getHttp2Payload()
+			h.payloadLock.Lock()
+			if h.cachedHttp2Payload == nil {
+				h.cachedHttp2Payload = h.getHttp2Payload()
+			}
+			h.payloadLock.Unlock()
 		}
 
 		return h.cachedHttp2Payload
@@ -124,4 +143,19 @@ func ProbeRedirects(req *http.Request) error {
 	}
 
 	return nil
+}
+
+func getRequestBodyBytes(req *http.Request) ([]byte, error) {
+	if req.Body == nil {
+		return nil, nil
+	}
+
+	body, err := io.ReadAll(req.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Body = io.NopCloser(bytes.NewReader(body))
+
+	return body, nil
 }
